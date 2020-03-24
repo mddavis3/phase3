@@ -5,12 +5,13 @@ AR=ar
 COBJS= phase3.o 
 CSRCS=${COBJS:.o=.c}
 HDRS= sems.h
-
 INCLUDE = ./usloss/include
+
 CFLAGS = -Wall -g -I${INCLUDE} -I. -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
 
 
 LDFLAGS = -L. -L./usloss/lib
+
 TESTDIR=testcases
 TESTS= test00 test01 test02 test03 test04 test05 test06 test07 test08 \
        test09 test10 test11 test12 test13 test14 test15 test16 test17 \
@@ -37,5 +38,5 @@ clean:
 	rm -f $(COBJS) $(TARGET) test*.o term* $(TESTS) libuser.o p1.o core
 
 phase3.o:	sems.h
-
+	$(CC) $(CFLAGS) -c phase3.c
 
