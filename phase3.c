@@ -78,3 +78,13 @@ int start2(char *arg)
     pid = wait_real(&status);
 
 } /* start2 */
+
+int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int priority)
+{
+    return 0;
+}
+
+int wait_real(int *status)
+{
+    return 0;
+}
