@@ -32,10 +32,11 @@ int start2 (char *);
 extern int start3 (char *);
 
 static void spawn(sysargs *);
-int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int priority);
+int spawn_real(char *, int (*func)(char *), char *, int, int);
 int spawn_launch(char *);
 
-int wait_real(int *status);
+static void wait(sysargs *);
+int wait_real(int *);
 int terminate_real(int);
 static void nullsys3(sysargs *);
 
@@ -44,7 +45,7 @@ static void nullsys3(sysargs *);
 int debugflag3 = 1;
 
 pcb ProcessTable3[MAXPROC];
-pcb dummy_pcb = {NULL, NULL, NULL, NULL, NULL, NULL};
+pcb dummy_pcb = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 
 
 
@@ -73,7 +74,6 @@ int start2(char *arg)
         halt(1);
     }
     
-
     /*
      * Data structure initialization as needed.
      */
@@ -98,7 +98,7 @@ int start2(char *arg)
         sys_vec[i] = nullsys3;
     }
     sys_vec[SYS_SPAWN] = spawn; 
-    //sys_vec[SYS_WAIT] = nullsys3; 
+    sys_vec[SYS_WAIT] = wait; 
     //sys_vec[SYS_TERMINATE] = nullsys3; 
     //sys_vec[SYS_GETTIMEOFDAY] = nullsys3;
     //sys_vec[SYS_CPUTIME] = nullsys3;
@@ -156,12 +156,6 @@ int start2(char *arg)
 /* spawn */
 static void spawn(sysargs *args_ptr)
 {
-    //check for kernel mode
-    if (DEBUG2 && debugflag3)
-    {
-        console ("spawn(): Calling CHECKMODE\n");
-    }
-    CHECKMODE;
 
     //define local variables
     char *name;
@@ -278,7 +272,11 @@ int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int p
         return kidpid;
     }
     kid_location = kidpid % MAXPROC;
+    ProcessTable3[kid_location].pid = kidpid;
     ProcessTable3[kid_location].start_mbox = MboxCreate(0, MAX_MESSAGE);
+    ProcessTable3[kid_location].parent_ptr = &ProcessTable3[my_location];
+    ProcessTable3[kid_location].start_arg = arg;
+    ProcessTable3[kid_location].start_func = func;
 
     //Then synchronize with the child using a mailbox
     if (DEBUG2 && debugflag3)
@@ -308,6 +306,8 @@ int spawn_launch(char *arg)
     int my_location;
     int result;
     int (* start_func) (char *);
+    char *start_arg;
+    pcb_ptr parent_ptr;
     // more to add if you see necessary
 
     my_location = getpid() % MAXPROC;
@@ -320,6 +320,21 @@ int spawn_launch(char *arg)
         console ("spawn_launch(): Maintaining Process Table entry\n");
     }
     ProcessTable3[my_location].status = ITEM_IN_USE;
+
+    //if the parent process established the child process control block first
+    //then these statements will work
+    //may want to wrap these in some sort of conditional block
+    start_func = ProcessTable3[my_location].start_func;
+    start_arg = ProcessTable3[my_location].start_arg;
+
+    if (ProcessTable3[my_location].parent_ptr->child_ptr == NULL)
+    {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_launch(): Parent has no child, maintain pointers\n");
+        }
+        ProcessTable3[my_location].parent_ptr->child_ptr = &ProcessTable3[my_location];
+    }
 
     //Synchronize with the parent process 
     if (DEBUG2 && debugflag3)
@@ -335,14 +350,37 @@ int spawn_launch(char *arg)
     }
     if ( !is_zapped() ) 
     {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_launch(): Not zapped, set user mode\n");
+        }
         //more code if you see necessary
         //Set user mode
         psr_set(psr_get() & ~PSR_CURRENT_MODE);
-        result = (start_func)(arg);
+
+        //double check the psr mode
+        if (DEBUG2 && debugflag3)
+        {
+            if ((psr_get() & PSR_CURRENT_MODE) == 0)
+            {
+                console("spawn_launch(): in user mode\n");
+            }
+        }
+
+        result = (start_func)(start_arg);
+
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_launch(): Terminate(result)\n");
+        }
         Terminate(result);
     }
     else 
     {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_launch(): zapped, terminate_real(0)\n");
+        }
         terminate_real(0);
     }
     printf("spawn_launch(): should not see this message following Terminate!\n");
@@ -352,9 +390,88 @@ int spawn_launch(char *arg)
 
 
 
+/* wait */
+static void wait(sysargs *args_ptr)
+{
+
+    int status;
+    int kid_pid;
+
+    //terminate process if zapped
+    if (DEBUG2 && debugflag3)
+    {
+        console ("wait(): Checking if zapped\n");
+    }
+    if (is_zapped()) 
+    { 
+        //should terminate the process 
+    }
+
+    if (DEBUG2 && debugflag3)
+    {
+        console ("wait(): Calling wait_real\n");
+    }
+    kid_pid = wait_real(&status);
+
+    if (DEBUG2 && debugflag3)
+    {
+        console ("wait(): Returning kid_pid and status\n");
+    }
+    args_ptr->arg1 = (void *) kid_pid;
+    args_ptr->arg2 = (void *) status;
+    args_ptr->arg4 = (void *) 0;
+
+    //terminate process if zapped
+    if (DEBUG2 && debugflag3)
+    {
+        console ("wait(): Checking if zapped\n");
+    }
+    if (is_zapped()) 
+    { 
+        //should terminate the process 
+    }
+
+    return;
+} /* wait */
+
+
+
 /* wait_real */
 int wait_real(int *status)
 {
+    if (DEBUG2 && debugflag3)
+    {
+        console ("wait_real(): Defining local variables\n");
+    }
+    int my_location;
+    int kid_location = 0;
+    int result;
+
+    my_location = getpid() % MAXPROC;
+    
+
+    //if the process has no children
+    if (ProcessTable3[my_location].child_ptr == NULL)
+    {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("wait_real(): process has no children, return -1\n");
+        }
+        return -1; 
+    }
+
+    //block the process until the child process terminates
+    if (DEBUG2 && debugflag3)
+    {
+        console ("wait_real(): calling MboxReceive to block process\n");
+    }
+    result = MboxReceive(ProcessTable3[my_location].start_mbox, &kid_location, sizeof(int));
+
+    //success
+    if (DEBUG2 && debugflag3)
+    {
+        console ("wait_real(): returning 0\n");
+    }
     return 0;
 } /* wait_real */
 
