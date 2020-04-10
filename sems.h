@@ -1,5 +1,6 @@
 #define DEBUG2 1
 #define ITEM_IN_USE 1
+#define ITEM_WAITING 2
 
 #define CHECKMODE { \
 	if (psr_get() & PSR_CURRENT_MODE) { \
@@ -14,7 +15,9 @@ typedef struct pcb *pcb_ptr;
 /* Phase3 Process Control Block */
 struct pcb {
     int pid;
+    char *name;
     int status;
+    int num_of_children;
     pcb_ptr parent_ptr;
     pcb_ptr child_ptr;
     pcb_ptr sibling_ptr;

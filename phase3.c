@@ -37,15 +37,23 @@ int spawn_launch(char *);
 
 static void wait(sysargs *);
 int wait_real(int *);
+
+static void terminate(sysargs *);
 int terminate_real(int);
+
+static void cpuTime(sysargs *);
+int cpuTime_real(int *);
+
 static void nullsys3(sysargs *);
 
+int insertChild(int, int);
+int removeChild(int);
 
 /* -------------------------- Globals ------------------------------------- */
-int debugflag3 = 1;
+int debugflag3 = 0;
 
 pcb ProcessTable3[MAXPROC];
-pcb dummy_pcb = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+pcb dummy_pcb = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 
 
 
@@ -99,9 +107,9 @@ int start2(char *arg)
     }
     sys_vec[SYS_SPAWN] = spawn; 
     sys_vec[SYS_WAIT] = wait; 
-    //sys_vec[SYS_TERMINATE] = nullsys3; 
-    //sys_vec[SYS_GETTIMEOFDAY] = nullsys3;
-    //sys_vec[SYS_CPUTIME] = nullsys3;
+    sys_vec[SYS_TERMINATE] = terminate; 
+    //sys_vec[SYS_GETTIMEOFDAY] = getTimeOfDay;
+    sys_vec[SYS_CPUTIME] = cpuTime;
     //sys_vec[SYS_GETPID] = nullsys3;
 
     /*
@@ -158,6 +166,10 @@ static void spawn(sysargs *args_ptr)
 {
 
     //define local variables
+    if (DEBUG2 && debugflag3)
+    {
+        console ("spawn(): defining local variables\n");
+    }
     char *name;
     int (*func)(char *);
     char *arg;
@@ -245,14 +257,17 @@ int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int p
     my_location = getpid() % MAXPROC;
 
     //Create a mailbox for start2
+    //start2 pcb entries
     //Every other process will have a mailbox created for it later
-    if (name = "start3")
+    if (name == "start3")
     {
         if (DEBUG2 && debugflag3)
         {
             console ("spawn_real(): Creating start_mbox for start2\n");
         }
+        ProcessTable3[my_location].pid = getpid();
         ProcessTable3[my_location].start_mbox = MboxCreate(0, MAX_MESSAGE);
+        ProcessTable3[my_location].name = "start2";
     }
 
     /* create our child */
@@ -262,7 +277,7 @@ int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int p
     }
     kidpid = fork1(name, spawn_launch, NULL, stack_size, priority);
 
-    //more to check the kidpid and put the new process data to the process table
+    //check the kidpid and put the new process data to the process table
     if (kidpid == -1)
     {   
         if (DEBUG2 && debugflag3)
@@ -272,9 +287,17 @@ int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int p
         return kidpid;
     }
     kid_location = kidpid % MAXPROC;
-    ProcessTable3[kid_location].pid = kidpid;
-    ProcessTable3[kid_location].start_mbox = MboxCreate(0, MAX_MESSAGE);
+    if (ProcessTable3[kid_location].pid == NULL)
+    {
+        ProcessTable3[kid_location].pid = kidpid;
+    }
+    if (ProcessTable3[kid_location].start_mbox == NULL)
+    {
+        ProcessTable3[kid_location].start_mbox = MboxCreate(0, MAX_MESSAGE);
+    }
     ProcessTable3[kid_location].parent_ptr = &ProcessTable3[my_location];
+    ProcessTable3[kid_location].name = name;
+    ProcessTable3[kid_location].num_of_children = 0;
     ProcessTable3[kid_location].start_arg = arg;
     ProcessTable3[kid_location].start_func = func;
 
@@ -308,11 +331,9 @@ int spawn_launch(char *arg)
     int (* start_func) (char *);
     char *start_arg;
     pcb_ptr parent_ptr;
-    // more to add if you see necessary
 
+    //get child's location in process table
     my_location = getpid() % MAXPROC;
-
-    /* Sanity Check */
 
     /* Maintain the process table entry, you can add more */
     if (DEBUG2 && debugflag3)
@@ -321,28 +342,50 @@ int spawn_launch(char *arg)
     }
     ProcessTable3[my_location].status = ITEM_IN_USE;
 
-    //if the parent process established the child process control block first
-    //then these statements will work
-    //may want to wrap these in some sort of conditional block
+    //if child runs before parent after fork
+    if (ProcessTable3[my_location].pid == NULL)
+    {
+        ProcessTable3[my_location].pid = getpid();
+    }
+    if (ProcessTable3[my_location].start_mbox == NULL)
+    {
+        ProcessTable3[my_location].start_mbox = MboxCreate(0, MAX_MESSAGE);
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_launch(): Calling MboxReceive (child ran first)\n");
+        }
+        result = MboxReceive(ProcessTable3[my_location].start_mbox, &parent_location, sizeof(int));
+    }
+
+    //initialize the start_func and start_arg 
+    //after parent has unblocked child using mboxsend
     start_func = ProcessTable3[my_location].start_func;
     start_arg = ProcessTable3[my_location].start_arg;
 
-    if (ProcessTable3[my_location].parent_ptr->child_ptr == NULL)
+    //insert the child to parents linked list
+    //result will equal the number of children the parent has
+    if (DEBUG2 && debugflag3)
     {
-        if (DEBUG2 && debugflag3)
-        {
-            console ("spawn_launch(): Parent has no child, maintain pointers\n");
-        }
-        ProcessTable3[my_location].parent_ptr->child_ptr = &ProcessTable3[my_location];
+        console ("spawn_launch(): calling insertChild to maintain linked list\n");
+    }
+    parent_location = ProcessTable3[my_location].parent_ptr->pid % MAXPROC;
+    ProcessTable3[parent_location].num_of_children = insertChild(my_location, parent_location);
+
+    if (DEBUG2 && debugflag3)
+    {
+        console ("spawn_launch(): Process %s num_of_children = %d\n", ProcessTable3[parent_location].name, ProcessTable3[parent_location].num_of_children);
     }
 
     //Synchronize with the parent process 
-    if (DEBUG2 && debugflag3)
+    if (result != sizeof(int))
     {
-        console ("spawn_launch(): Calling MboxReceive\n");
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_launch(): Calling MboxReceive\n");
+        }
+        result = MboxReceive(ProcessTable3[my_location].start_mbox, &parent_location, sizeof(int));
     }
-    result = MboxReceive(ProcessTable3[my_location].start_mbox, &parent_location, sizeof(int));
-
+    
     //add more code
     if (DEBUG2 && debugflag3)
     {
@@ -404,7 +447,7 @@ static void wait(sysargs *args_ptr)
     }
     if (is_zapped()) 
     { 
-        //should terminate the process 
+        terminate(args_ptr);
     }
 
     if (DEBUG2 && debugflag3)
@@ -428,7 +471,7 @@ static void wait(sysargs *args_ptr)
     }
     if (is_zapped()) 
     { 
-        //should terminate the process 
+        terminate(args_ptr); 
     }
 
     return;
@@ -446,43 +489,175 @@ int wait_real(int *status)
     int my_location;
     int kid_location = 0;
     int result;
+    int kidpid;
 
     my_location = getpid() % MAXPROC;
     
-
     //if the process has no children
     if (ProcessTable3[my_location].child_ptr == NULL)
     {
         if (DEBUG2 && debugflag3)
         {
-            console ("wait_real(): process has no children, return -1\n");
+            console ("wait_real(): process %s has no children, return -1\n", ProcessTable3[my_location].name);
         }
         return -1; 
     }
-
+    else
+    {
+        kidpid = ProcessTable3[my_location].child_ptr->pid;
+    }
+    
     //block the process until the child process terminates
     if (DEBUG2 && debugflag3)
     {
-        console ("wait_real(): calling MboxReceive to block process\n");
+        console ("wait_real(): calling MboxReceive to block process until child terminates\n");
     }
-    result = MboxReceive(ProcessTable3[my_location].start_mbox, &kid_location, sizeof(int));
+    ProcessTable3[my_location].status = ITEM_WAITING;
+    result = MboxReceive(ProcessTable3[my_location].start_mbox, status, sizeof(int));
+    ProcessTable3[my_location].status = ITEM_IN_USE;
+    join(&status);
 
     //success
     if (DEBUG2 && debugflag3)
     {
-        console ("wait_real(): returning 0\n");
+        console ("wait_real(): returning kidpid\n");
     }
-    return 0;
+    return kidpid;
 } /* wait_real */
+
+
+
+/* terminate */
+static void terminate(sysargs *args_ptr)
+{
+    //define local variables
+    if (DEBUG2 && debugflag3)
+    {
+        console ("terminate(): defining local variables\n");
+    }
+    int status;
+    int result;
+
+    //unpack sysargs struct
+    if (DEBUG2 && debugflag3)
+    {
+        console ("terminate(): unpacking sysargs structure\n");
+    }
+    status = (int) args_ptr->arg1;
+
+    //call terminate_real handler
+    if (DEBUG2 && debugflag3)
+    {
+        console ("terminate(): calling terminate_real\n");
+    }
+    result = terminate_real(status);
+
+    return ;
+} /* terminate */
 
 
 
 /* terminate_real */
 int terminate_real(int status)
 {
+    //define local variables
+    if (DEBUG2 && debugflag3)
+    {
+        console ("terminate_real(): defining local variables\n");
+    }
+    int my_location = getpid() % MAXPROC;
+    int parent_location;
+    int result;
+
+    parent_location = ProcessTable3[my_location].parent_ptr->pid % MAXPROC;
+    
+    if (ProcessTable3[my_location].num_of_children == 0)
+    {
+        if(ProcessTable3[parent_location].status == ITEM_WAITING)
+        {
+            if (DEBUG2 && debugflag3)
+            {
+                console ("terminate_real(): Process %s - no child. Call MboxSend - sync w/%s wait\n", ProcessTable3[my_location].name, ProcessTable3[parent_location].name);
+            }
+            result = MboxSend(ProcessTable3[parent_location].start_mbox, &status, sizeof(int));
+        }
+
+        if (DEBUG2 && debugflag3)
+        {
+            console ("terminate_real(): Process %s - no child. quit(0)\n", ProcessTable3[my_location].name);
+        }
+        removeChild(ProcessTable3[my_location].parent_ptr->pid);
+        quit(0);
+    }
+
+    //call zap to zap each child
+    if (DEBUG2 && debugflag3)
+    {
+        console ("terminate_real(): entering zap, removeChild while loop\n");
+    }
+    while (ProcessTable3[my_location].num_of_children != 0)
+    {
+        //call zap to zap child
+        result = zap(ProcessTable3[my_location].child_ptr->pid);
+        //maintain linked list for parent/children
+        result = removeChild(my_location);
+    }
+
+    if (DEBUG2 && debugflag3)
+    {
+        console ("terminate_real(): completed while loop\n");
+    }
+
+    //terminate user-level process using quit(0)
+    if (DEBUG2 && debugflag3)
+    {
+        console ("terminate_real(): calling MboxSend to sync with wait syscall\n");
+    }
+    result = MboxSend(ProcessTable3[parent_location].start_mbox, &status, sizeof(int));
+
+    if (DEBUG2 && debugflag3)
+    {
+        console ("terminate_real(): calling quit(0) for process %s\n", ProcessTable3[my_location].name);
+    }
     quit(0);
+
     return 0;
 } /* terminate_real */
+
+
+
+/* cpuTime */
+static void cpuTime(sysargs *args_ptr)
+{
+    int time;
+    int result;
+
+    result = cpuTime_real(&time);
+
+    args_ptr->arg1 = (void *) result;
+    return;
+} /* cpuTime */
+
+
+
+/* cpuTime_real */
+int cpuTime_real(int *time)
+{
+    time = readtime();
+    return time;
+} /* cpuTime_real */
+
+
+
+/* getTimeOfDay */
+
+/* getTimeOfDay */
+
+
+
+/* getPID */
+
+/* getPID */
 
 
 
@@ -493,3 +668,75 @@ static void nullsys3(sysargs *args_ptr)
    printf("nullsys3(): process %d terminating\n", getpid());
    terminate_real(1);
 } /* nullsys3 */
+
+
+
+/* insertChild */
+int insertChild(int child_location, int parent_location)
+{
+    int num_of_children = 0;
+    pcb_ptr temp_ptr;
+
+    //check if parent's child_ptr is null
+    //number of children starts at 0
+    if (ProcessTable3[parent_location].child_ptr == NULL)
+    {
+        ProcessTable3[parent_location].child_ptr = &ProcessTable3[child_location];
+        num_of_children++;
+    }
+    //parent's child_ptr is not null
+    //number of children starts at 1
+    else
+    {
+        num_of_children = 1;
+
+        //point the temp_ptr at the first child
+        temp_ptr = ProcessTable3[parent_location].child_ptr;
+
+        //while the child's sibling_ptr is not NULL
+        //point the temp_ptr at the sibling
+        while (temp_ptr->sibling_ptr != NULL)
+        {
+            temp_ptr = temp_ptr->sibling_ptr;
+            num_of_children++;
+        }
+
+        //point the NULL sibling_ptr at the target child PCB
+        temp_ptr->sibling_ptr = &ProcessTable3[child_location];
+        num_of_children++;
+    }
+    
+    return num_of_children;
+} /* insertChild */
+
+
+
+/* removeChild */
+int removeChild(int parent_location)
+{
+    pcb_ptr temp;
+
+    //if parent has no children
+    if (ProcessTable3[parent_location].num_of_children == 0)
+    {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("removeChild(): Process has no children\n");
+        }
+        return ProcessTable3[parent_location].num_of_children;
+    }
+    //if parent has >= 1 children
+    else
+    {
+        temp = ProcessTable3[parent_location].child_ptr;
+
+        //point the parent's child_ptr at the child's sibling
+        ProcessTable3[parent_location].child_ptr = ProcessTable3[parent_location].child_ptr->sibling_ptr;
+        ProcessTable3[parent_location].num_of_children--;
+
+        //erase removed child's sibling ptr
+        temp->sibling_ptr = NULL;
+    }
+    
+    return ProcessTable3[parent_location].num_of_children;
+} /* removeChild */
