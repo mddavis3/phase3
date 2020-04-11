@@ -20,7 +20,8 @@ if (DEBUG2 && debugflag3)
 #include <stdlib.h>                      
 #include <strings.h>                     
 #include <stdio.h>                     
-#include <string.h>  
+#include <string.h>
+#include <time.h>  
 
 #include <libuser.h>
 #include <usyscall.h>
@@ -43,6 +44,12 @@ int terminate_real(int);
 
 static void cpuTime(sysargs *);
 int cpuTime_real(int *);
+
+static void getTimeOfDay(sysargs *);
+int getTimeOfDay_real(int *);
+
+static void getPID(sysargs *);
+int getPID_real(int *);
 
 static void nullsys3(sysargs *);
 
@@ -108,9 +115,9 @@ int start2(char *arg)
     sys_vec[SYS_SPAWN] = spawn; 
     sys_vec[SYS_WAIT] = wait; 
     sys_vec[SYS_TERMINATE] = terminate; 
-    //sys_vec[SYS_GETTIMEOFDAY] = getTimeOfDay;
+    sys_vec[SYS_GETTIMEOFDAY] = getTimeOfDay;
     sys_vec[SYS_CPUTIME] = cpuTime;
-    //sys_vec[SYS_GETPID] = nullsys3;
+    sys_vec[SYS_GETPID] = getPID;
 
     /*
      * Create first user-level process and wait for it to finish.
@@ -366,7 +373,7 @@ int spawn_launch(char *arg)
     //result will equal the number of children the parent has
     if (DEBUG2 && debugflag3)
     {
-        console ("spawn_launch(): calling insertChild to maintain linked list\n");
+        console ("spawn_launch(): calling insertChild - %s\n", ProcessTable3[my_location].name);
     }
     parent_location = ProcessTable3[my_location].parent_ptr->pid % MAXPROC;
     ProcessTable3[parent_location].num_of_children = insertChild(my_location, parent_location);
@@ -579,14 +586,19 @@ int terminate_real(int status)
             {
                 console ("terminate_real(): Process %s - no child. Call MboxSend - sync w/%s wait\n", ProcessTable3[my_location].name, ProcessTable3[parent_location].name);
             }
+            removeChild(ProcessTable3[my_location].parent_ptr->pid);
             result = MboxSend(ProcessTable3[parent_location].start_mbox, &status, sizeof(int));
         }
-
+        else
+        {
+            removeChild(ProcessTable3[my_location].parent_ptr->pid);
+        }
+        
         if (DEBUG2 && debugflag3)
         {
             console ("terminate_real(): Process %s - no child. quit(0)\n", ProcessTable3[my_location].name);
         }
-        removeChild(ProcessTable3[my_location].parent_ptr->pid);
+        //removeChild(ProcessTable3[my_location].parent_ptr->pid);
         quit(0);
     }
 
@@ -597,6 +609,10 @@ int terminate_real(int status)
     }
     while (ProcessTable3[my_location].num_of_children != 0)
     {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("terminate_real(): zapping %s, pid %d\n", ProcessTable3[my_location].child_ptr->name, ProcessTable3[my_location].child_ptr->pid);
+        }
         //call zap to zap child
         result = zap(ProcessTable3[my_location].child_ptr->pid);
         //maintain linked list for parent/children
@@ -611,8 +627,9 @@ int terminate_real(int status)
     //terminate user-level process using quit(0)
     if (DEBUG2 && debugflag3)
     {
-        console ("terminate_real(): calling MboxSend to sync with wait syscall\n");
+        console ("terminate_real(): Process %s call MboxSend - sync w/%s wait\n", ProcessTable3[my_location].name, ProcessTable3[parent_location].name);
     }
+    removeChild(ProcessTable3[parent_location].pid);
     result = MboxSend(ProcessTable3[parent_location].start_mbox, &status, sizeof(int));
 
     if (DEBUG2 && debugflag3)
@@ -650,14 +667,49 @@ int cpuTime_real(int *time)
 
 
 /* getTimeOfDay */
+static void getTimeOfDay(sysargs *args_ptr)
+{
+    int timeOfDay;
+    int result;
 
-/* getTimeOfDay */
+    result = getTimeOfDay_real(&timeOfDay);
+
+    args_ptr->arg1 = (void *) result;
+    return;
+} /* getTimeOfDay */
+
+
+
+/* getTimeOfDay_real */
+int getTimeOfDay_real(int *timeOfDay)
+{
+    time_t currentTime;
+    timeOfDay = (int) time(&currentTime);
+    return timeOfDay;
+} /* getTimeOfDay_real */
 
 
 
 /* getPID */
+static void getPID(sysargs *args_ptr)
+{
+    int pid;
+    int result;
 
-/* getPID */
+    result = getPID_real(&time);
+
+    args_ptr->arg1 = (void *) result;
+    return;
+} /* getPID */
+
+
+
+/* getPID_real */
+int getPID_real(int *pid)
+{
+    pid = getpid();
+    return pid;
+} /* getPID_real */
 
 
 
@@ -715,13 +767,14 @@ int insertChild(int child_location, int parent_location)
 int removeChild(int parent_location)
 {
     pcb_ptr temp;
+    int child_location;
 
     //if parent has no children
     if (ProcessTable3[parent_location].num_of_children == 0)
     {
         if (DEBUG2 && debugflag3)
         {
-            console ("removeChild(): Process has no children\n");
+            console ("removeChild(): Process %s has no children\n", ProcessTable3[parent_location].name);
         }
         return ProcessTable3[parent_location].num_of_children;
     }
@@ -736,6 +789,10 @@ int removeChild(int parent_location)
 
         //erase removed child's sibling ptr
         temp->sibling_ptr = NULL;
+
+        //cleanup Process Table
+        //child_location = temp->pid % MAXPROC;
+        //ProcessTable3[child_location] = dummy_pcb;
     }
     
     return ProcessTable3[parent_location].num_of_children;

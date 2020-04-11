@@ -12,7 +12,7 @@ int start3(char *arg)
 
    console("start3(): started\n");
    GetTimeofDay(&start);
-   for(i=0; i<100000; i++)
+   for(i=0; i<1000000000; i++)
       ;
    GetTimeofDay(&end);
    elapsed = end - start;
