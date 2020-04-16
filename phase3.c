@@ -263,6 +263,14 @@ int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int p
 
     my_location = getpid() % MAXPROC;
 
+    if (is_zapped())
+    {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_real(): Is zapped. terminate_real(0)\n");
+        }
+        terminate_real(0);
+    }
     //Create a mailbox for start2
     //start2 pcb entries
     //Every other process will have a mailbox created for it later
@@ -314,6 +322,15 @@ int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int p
         console ("spawn_real(): Calling MboxSend\n");
     }
     result = MboxSend(ProcessTable3[kid_location].start_mbox, &my_location, sizeof(int));
+
+    if (is_zapped())
+    {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_real(): Is zapped. terminate_real(0)\n");
+        }
+        terminate_real(0);
+    }
 
     //more to add
     if (DEBUG2 && debugflag3)
@@ -499,6 +516,15 @@ int wait_real(int *status)
     int kidpid;
 
     my_location = getpid() % MAXPROC;
+
+    if (is_zapped())
+    {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_real(): Is zapped. terminate_real(0)\n");
+        }
+        terminate_real(0);
+    }
     
     //if the process has no children
     if (ProcessTable3[my_location].child_ptr == NULL)
@@ -523,6 +549,15 @@ int wait_real(int *status)
     result = MboxReceive(ProcessTable3[my_location].start_mbox, status, sizeof(int));
     ProcessTable3[my_location].status = ITEM_IN_USE;
     join(&status);
+
+    if (is_zapped())
+    {
+        if (DEBUG2 && debugflag3)
+        {
+            console ("spawn_real(): Is zapped. terminate_real(0)\n");
+        }
+        terminate_real(0);
+    }
 
     //success
     if (DEBUG2 && debugflag3)
